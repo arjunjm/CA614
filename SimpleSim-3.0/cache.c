@@ -63,6 +63,7 @@
 #define CACHE_SET(cp, addr)	(((addr) >> (cp)->set_shift) & (cp)->set_mask)
 #define CACHE_BLK(cp, addr)	((addr) & (cp)->blk_mask)
 #define CACHE_TAGSET(cp, addr)	((addr) & (cp)->tagset_mask)
+#define CACHE_TAG_PSEUDOASSOC(cp, addr) ((addr) >> (cp)->tag_shift-1)       // Tag shift for pseudo-associative cache should include highest bit of index
 
 /* extract/reconstruct a block address */
 #define CACHE_BADDR(cp, addr)	((addr) & ~(cp)->blk_mask)
@@ -310,6 +311,7 @@ cache_create(char *name,		/* name of the cache */
   cp->assoc = assoc;
   cp->policy = policy;
   cp->hit_latency = hit_latency;
+  cp->pseudoassoc_cache  = 0;
 
   /* miss/replacement functions */
   cp->blk_access_fn = blk_access_fn;
@@ -383,6 +385,7 @@ cache_create(char *name,		/* name of the cache */
 	  blk->ready = 0;
 	  blk->user_data = (usize != 0
 			    ? (byte_t *)calloc(usize, sizeof(byte_t)) : NULL);
+      blk->rehash_bit=1;
 
 	  /* insert cache block into set hash table */
 	  if (cp->hsize)
@@ -513,6 +516,8 @@ cache_access(struct cache_t *cp,	/* cache to access */
   struct cache_blk_t *blk, *repl;
   int lat = 0;
 
+  md_addr_t pseudo_assoc_tag = CACHE_TAG_PSEUDOASSOC(cp, addr); 
+
   /* default replacement address */
   if (repl_addr)
     *repl_addr = 0;
@@ -550,22 +555,62 @@ cache_access(struct cache_t *cp,	/* cache to access */
 	    goto cache_hit;
 	}
     }
+  else if (cp->assoc==1 && cp->pseudoassoc_cache>0)
+  {
+        /* low-associativity cache, linear search the way list */
+        for (blk=cp->sets[set].way_head;
+                blk;
+                blk=blk->way_next)
+        {
+            // if pseudo-associative, add msb of index to tag.
+            md_addr_t block_tag = (blk->tag << 1) | ((addr >> (cp->tag_shift - 1)) & 1);
+
+            if (block_tag == pseudo_assoc_tag && (blk->status & CACHE_BLK_VALID))
+                goto cache_hit;
+        }
+  }
   else
     {
-      /* low-associativity cache, linear search the way list */
-      for (blk=cp->sets[set].way_head;
-	   blk;
-	   blk=blk->way_next)
-	{
-	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	    goto cache_hit;
-	}
+        /* low-associativity cache, linear search the way list */
+        for (blk=cp->sets[set].way_head;
+                blk;
+                blk=blk->way_next)
+        {
+            if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
+                goto cache_hit;
+        }
     }
 
   /* cache block not found */
 
+    if(cp->assoc==1 && cp->pseudoassoc_cache>0)
+    {
+        /* if pseudo-associative, also check with flipped set bit */
+        md_addr_t flipped_set = set ^ (1 << ((cp->tag_shift)-(cp->set_shift)-1));
+
+        for (blk = cp->sets[flipped_set].way_head; blk; blk=blk->way_next)
+        {
+            md_addr_t block_tag = (blk->tag << 1) | ((addr >> ((cp->tag_shift)-1)) & 1);
+
+            if (block_tag == pseudo_assoc_tag && (blk->status & CACHE_BLK_VALID))
+            {
+                // flip tag and data with original block (unflipped set bit)
+                struct cache_set_t temp = cp->sets[flipped_set]; 
+                cp->sets[flipped_set] = cp->sets[set]; 
+                cp->sets[set] = temp;
+
+                goto cache_hit;
+            }
+        }
+    }
+
   /* **MISS** */
   cp->misses++;
+
+  if (cp->assoc==1 && cp->pseudoassoc_cache>0)
+  {
+      set = set ^ (1 << ((cp->tag_shift)-(cp->set_shift)-1));
+  }
 
   /* select the appropriate block to replace, and re-link this entry to
      the appropriate place in the way list */
@@ -648,6 +693,16 @@ cache_access(struct cache_t *cp,	/* cache to access */
   /* link this entry back into the hash table */
   if (cp->hsize)
     link_htab_ent(cp, &cp->sets[set], repl);
+ 
+  if (cp->assoc==1 && cp->pseudoassoc_cache>0)
+  {
+      // flip tag and data with original block (unflipped set bit)
+      md_addr_t flipped_set = set ^ (1 << ((cp->tag_shift)-(cp->set_shift)-1));
+
+      struct cache_set_t temp = cp->sets[flipped_set]; 
+      cp->sets[flipped_set] = cp->sets[set]; 
+      cp->sets[set] = temp;
+  }
 
   /* return latency of the operation */
   return lat;

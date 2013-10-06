@@ -119,6 +119,7 @@ struct cache_blk_t
 				   used in highly-associative caches */
   /* since hash table lists are typically small, there is no previous
      pointer, deletion requires a trip through the hash table bucket list */
+  int rehash_bit;       /* Bit to check if set was indexed by a rehash function */
   md_addr_t tag;		/* data block tag value */
   unsigned int status;		/* block status, see CACHE_BLK_* defs above */
   tick_t ready;		/* time when block will be accessible, field
@@ -156,6 +157,7 @@ struct cache_t
   int assoc;			/* cache associativity */
   enum cache_policy policy;	/* cache replacement policy */
   unsigned int hit_latency;	/* cache hit latency */
+  int pseudoassoc_cache;   /* flag to check if cache is pseudo associative */
 
   /* miss/replacement handler, read/write BSIZE bytes starting at BADDR
      from/into cache block BLK, returns the latency of the operation

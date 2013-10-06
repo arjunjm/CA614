@@ -187,6 +187,9 @@ static int flush_on_syscalls;
 /* convert 64-bit inst addresses to 32-bit inst equivalents */
 static int compress_icache_addrs;
 
+/* enable pseudo-associative cache for l1 data cache */
+static int enable_pseudo_assoc;
+
 /* memory access latency (<first_chunk> <inter_chunk>) */
 static int mem_nelt = 2;
 static int mem_lat[2] =
@@ -812,6 +815,11 @@ sim_reg_options(struct opt_odb_t *odb)
 	       &compress_icache_addrs, /* default */FALSE,
 	       /* print */TRUE, NULL);
 
+  opt_reg_flag(odb, "-pseudoassoc",
+           "enable pseudo-associative (column-associative) cache",
+           &enable_pseudo_assoc, FALSE, TRUE, NULL);
+
+
   /* mem options */
   opt_reg_int_list(odb, "-mem:lat",
 		   "memory access latency (<first_chunk> <inter_chunk>)",
@@ -1017,6 +1025,8 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
       cache_dl1 = cache_create(name, nsets, bsize, /* balloc */FALSE,
 			       /* usize */0, assoc, cache_char2policy(c),
 			       dl1_access_fn, /* hit lat */cache_dl1_lat);
+
+      cache_dl1->pseudoassoc_cache = enable_pseudo_assoc;
 
       /* is the level 2 D-cache defined? */
       if (!mystricmp(cache_dl2_opt, "none"))
